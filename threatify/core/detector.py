@@ -1,48 +1,34 @@
-# ─────────────────────────
-# CONFIG (Weights)
-# ─────────────────────────
-
-PROCESS_WEIGHTS = {
-    "Suspicious keyword": 30,
-    "Running from suspicious path": 20,
-    "Unknown executable path": 10,
-    "High CPU usage": 10,
-}
-
-STARTUP_WEIGHTS = {
-    "Runs from suspicious path": 35,
-    "Suspicious keyword": 40,
-    "Script-based execution": 25,
-    "Executable not found": 20,
-}
-
-NETWORK_WEIGHTS = {
-    "Unusual port": 10,
-    "Suspicious process name": 35,
-    "Abnormal state": 15,
-    "Running from suspicious path": 20,
-}
-
-FILE_WEIGHTS = {
-    "High frequency writes": 25,
-    "Suspicious location": 20,
-    "Repeated writes to log-like file": 15,
-    "Hidden file activity": 15,
-    "Large file activity": 10,
-}
+from threatify.core.config import (PROCESS_WEIGHTS, STARTUP_WEIGHTS,
+                                   NETWORK_WEIGHTS, FILE_WEIGHTS, MAX_SCORE)
 
 
 # ─────────────────────────
 # HELPERS
 # ─────────────────────────
 def _score_from_reasons(reason_string, weight_map):
+    """
+    Match reason keywords with weights
+    """
     score = 0
+    reason_string = reason_string.lower()
 
     for key, weight in weight_map.items():
-        if key.lower() in reason_string.lower():
+        if key.lower() in reason_string:
             score += weight
 
     return score
+
+
+def _normalize_score(score, total_items):
+    """
+    Normalize score based on number of alerts
+    """
+    if total_items == 0:
+        return 0
+
+    # Normalize to avoid inflation
+    normalized = score / total_items * 2
+    return min(int(normalized), MAX_SCORE)
 
 
 # ─────────────────────────
@@ -66,17 +52,17 @@ def calculate_threat_score(process_alerts,
     for alert in network_alerts:
         total_score += _score_from_reasons(alert["reason"], NETWORK_WEIGHTS)
 
-    # ─── File (optional) ───
+    # ─── File ───
     if file_alerts:
         for alert in file_alerts:
             total_score += _score_from_reasons(alert["reason"], FILE_WEIGHTS)
 
-    # ─── Normalize score ───
-    # Prevent insane values when many alerts exist
-    if total_score > 100:
-        total_score = 100
+    # ─── Normalize ───
+    total_items = (len(process_alerts) + len(startup_alerts) +
+                   len(network_alerts) +
+                   (len(file_alerts) if file_alerts else 0))
 
-    return total_score
+    return _normalize_score(total_score, total_items)
 
 
 # ─────────────────────────

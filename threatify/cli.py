@@ -2,6 +2,7 @@ import click
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from threatify.scanner.process import scan_processes
 from threatify.scanner.startup import check_startup
@@ -13,13 +14,25 @@ console = Console()
 
 
 # ─────────────────────────
-# HELPERS (Reusable UI)
+# BANNER
+# ─────────────────────────
+def render_banner():
+    banner = Text()
+    banner.append("Threatify", style="bold cyan")
+    banner.append("  |  Behavioral Threat Detection System\n", style="white")
+    banner.append("Version 0.1.0\n", style="dim")
+
+    console.print(Panel.fit(banner))
+
+
+# ─────────────────────────
+# HELPERS
 # ─────────────────────────
 def render_process_table(alerts):
-    table = Table(title="⚠ Suspicious Processes")
+    table = Table(title="Process Analysis")
     table.add_column("Process", style="cyan")
     table.add_column("PID", style="yellow")
-    table.add_column("CPU%", style="magenta")
+    table.add_column("CPU (%)", style="magenta")
     table.add_column("Reason", style="red")
 
     for a in alerts:
@@ -29,7 +42,7 @@ def render_process_table(alerts):
 
 
 def render_startup_table(alerts):
-    table = Table(title="⚠ Startup Threats")
+    table = Table(title="Startup Analysis")
     table.add_column("Name", style="cyan")
     table.add_column("Location", style="blue")
     table.add_column("Reason", style="red")
@@ -41,7 +54,7 @@ def render_startup_table(alerts):
 
 
 def render_network_table(alerts):
-    table = Table(title="⚠ Network Threats")
+    table = Table(title="Network Analysis")
     table.add_column("Process", style="cyan")
     table.add_column("PID", style="yellow")
     table.add_column("Remote", style="magenta")
@@ -56,7 +69,7 @@ def render_network_table(alerts):
 
 
 def render_file_table(alerts):
-    table = Table(title="⚠ File Activity Threats")
+    table = Table(title="File Activity Analysis")
     table.add_column("File", style="yellow")
     table.add_column("Writes", style="cyan")
     table.add_column("Reason", style="red")
@@ -68,8 +81,8 @@ def render_file_table(alerts):
 
 
 def render_summary(score, risk):
-    console.print("\n[bold]Threat Analysis[/bold]")
-    console.print(f"Threat Score: [cyan]{score}/100[/cyan]")
+    console.print("\n[bold]Threat Assessment[/bold]")
+    console.print(f"Score: [cyan]{score}/100[/cyan]")
 
     color = {
         "SAFE": "green",
@@ -78,28 +91,33 @@ def render_summary(score, risk):
         "CRITICAL": "bold red"
     }[risk]
 
-    console.print(f"[{color}]System Status: {risk}[/{color}]")
+    console.print(f"Status: [{color}]{risk}[/{color}]")
 
 
 def show_help():
-    console.print(Panel.fit("[bold cyan]Threatify CLI[/bold cyan]"))
+    render_banner()
 
-    table = Table(title="Available Commands")
+    table = Table(title="Commands")
     table.add_column("Command", style="cyan")
-    table.add_column("Description", style="white")
+    table.add_column("Description")
 
     table.add_row("scan", "Run full system scan")
-    table.add_row("processes", "Scan running processes")
-    table.add_row("startup", "Scan startup programs")
-    table.add_row("network", "Scan network connections")
+    table.add_row("processes", "Analyze running processes")
+    table.add_row("startup", "Analyze startup persistence")
+    table.add_row("network", "Analyze network connections")
     table.add_row("files", "Monitor file activity")
-    table.add_row("--version", "Show version info")
+    table.add_row("--version", "Show version information")
 
     console.print(table)
 
-    console.print("\n[bold]Examples:[/bold]")
-    console.print("[yellow]threatify scan[/yellow]")
-    console.print("[yellow]threatify files --time 15[/yellow]")
+    console.print("\nExamples:")
+    console.print("  threatify scan")
+    console.print("  threatify scan --files")
+    console.print("  threatify files --time 15")
+
+
+def render_clean(message):
+    console.print(f"[green]{message}[/green]")
 
 
 # ─────────────────────────
@@ -109,10 +127,8 @@ def show_help():
 @click.option("--version", is_flag=True, help="Show Threatify version")
 @click.pass_context
 def main(ctx, version):
-    """Threatify - Behavioral Threat Detection CLI"""
-
     if version:
-        console.print("[cyan]Threatify v0.1.0[/cyan]")
+        console.print("Threatify v0.1.0")
         return
 
     if ctx.invoked_subcommand is None:
@@ -120,14 +136,14 @@ def main(ctx, version):
 
 
 # ─────────────────────────
-# FULL SYSTEM SCAN
+# FULL SCAN
 # ─────────────────────────
 @main.command()
 @click.option("--files", is_flag=True, help="Include file monitoring")
 def scan(files):
-    """Run full system scan"""
+    render_banner()
 
-    console.print(Panel.fit("[bold cyan]🚀 Threatify Full Scan[/bold cyan]"))
+    console.print("[bold]Starting system scan...[/bold]\n")
 
     process_alerts = scan_processes()
     startup_alerts = check_startup()
@@ -135,35 +151,35 @@ def scan(files):
     file_alerts = []
 
     if files:
-        console.print("[cyan]Monitoring file activity (5s)...[/cyan]")
+        console.print("Monitoring file activity...")
         file_alerts = monitor_files(duration=5)
 
-    # ─── Process ───
+    # Process
     if process_alerts:
         render_process_table(process_alerts)
     else:
-        console.print("[green]✔ No suspicious processes[/green]")
+        render_clean("No suspicious processes detected")
 
-    # ─── Startup ───
+    # Startup
     if startup_alerts:
         render_startup_table(startup_alerts)
     else:
-        console.print("[green]✔ No suspicious startup entries[/green]")
+        render_clean("No suspicious startup entries detected")
 
-    # ─── Network ───
+    # Network
     if network_alerts:
         render_network_table(network_alerts)
     else:
-        console.print("[green]✔ No suspicious network activity[/green]")
+        render_clean("No suspicious network activity detected")
 
-    # ─── File ───
+    # File
     if files:
         if file_alerts:
             render_file_table(file_alerts)
         else:
-            console.print("[green]✔ No suspicious file activity[/green]")
+            render_clean("No suspicious file activity detected")
 
-    # ─── Detection Engine ───
+    # Detection Engine
     score = calculate_threat_score(process_alerts, startup_alerts,
                                    network_alerts, file_alerts)
 
@@ -177,40 +193,50 @@ def scan(files):
 # ─────────────────────────
 @main.command()
 def processes():
+    render_banner()
     alerts = scan_processes()
+
     if not alerts:
-        console.print("[green]✔ No suspicious processes[/green]")
+        render_clean("No suspicious processes detected")
         return
+
     render_process_table(alerts)
 
 
 @main.command()
 def startup():
+    render_banner()
     alerts = check_startup()
+
     if not alerts:
-        console.print("[green]✔ No suspicious startup entries[/green]")
+        render_clean("No suspicious startup entries detected")
         return
+
     render_startup_table(alerts)
 
 
 @main.command()
 def network():
+    render_banner()
     alerts = scan_network()
+
     if not alerts:
-        console.print("[green]✔ No suspicious network activity[/green]")
+        render_clean("No suspicious network activity detected")
         return
+
     render_network_table(alerts)
 
 
 @main.command()
 @click.option("--time", default=10, help="Monitoring duration in seconds")
 def files(time):
-    console.print(f"[cyan]Monitoring file activity for {time}s...[/cyan]")
+    render_banner()
+    console.print(f"Monitoring file activity for {time} seconds...\n")
 
     alerts = monitor_files(duration=time)
 
     if not alerts:
-        console.print("[green]✔ No suspicious file activity[/green]")
+        render_clean("No suspicious file activity detected")
         return
 
     render_file_table(alerts)
