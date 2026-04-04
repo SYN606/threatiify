@@ -1,0 +1,23 @@
+[project]
+name = "threatify"
+version = "0.1.0"
+description = "Threatify - A lightweight behavioral threat detection CLI for monitoring system processes, startup entries, and suspicious activity."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1.7",
+    "psutil>=5.9.8",
+    "rich>=13.7.1",
+    "watchdog>=4.0.0",
+]
+
+# CLI entry point
+[project.scripts]
+threatify = "threatify.cli:main"
+
+# Dev tools (optional but recommended)
+[tool.uv]
+dev-dependencies = [
+    "ruff",     # linting
+    "pytest",   # testing
+]
