@@ -4,11 +4,11 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from threatify.scanner.process import scan_processes
-from threatify.scanner.startup import check_startup
-from threatify.scanner.network import scan_network
-from threatify.scanner.file import monitor_files
-from threatify.core.detector import calculate_threat_score, get_risk_level
+from scanner.process import scan_processes
+from scanner.startup import check_startup
+from scanner.network import scan_network
+from scanner.file import monitor_files
+from core.detector import calculate_threat_score, get_risk_level
 
 console = Console()
 
