@@ -1,4 +1,4 @@
-from threatify.core.config import (PROCESS_WEIGHTS, STARTUP_WEIGHTS,
+from core.config import (PROCESS_WEIGHTS, STARTUP_WEIGHTS,
                                    NETWORK_WEIGHTS, FILE_WEIGHTS, MAX_SCORE)
 
 
