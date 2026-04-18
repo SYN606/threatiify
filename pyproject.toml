@@ -8,6 +8,7 @@ dependencies = [
     "click>=8.1.7",
     "psutil>=5.9.8",
     "rich>=13.7.1",
+    "streamlit>=1.56.0",
     "watchdog>=4.0.0",
 ]
 
