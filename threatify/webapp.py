@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time
 
 from scanner.process import scan_processes
 from scanner.startup import check_startup
@@ -11,38 +12,30 @@ from core.aggregator import aggregate_by_process
 
 
 # ─────────────────────────
-# PAGE CONFIG
+# CONFIG
 # ─────────────────────────
 st.set_page_config(page_title="Threatify", layout="wide")
 
+st.title("Threatify")
+st.caption("Behavioral Threat Detection System")
+
+
 # ─────────────────────────
-# SESSION STATE
+# STATE
 # ─────────────────────────
 if "results" not in st.session_state:
     st.session_state.results = None
 
-# ─────────────────────────
-# STYLING
-# ─────────────────────────
-st.markdown("""
-<style>
-.main { background-color: #0b0f17; }
-.block-container { padding-top: 2rem; }
-</style>
-""", unsafe_allow_html=True)
+if "has_scanned" not in st.session_state:
+    st.session_state.has_scanned = False
+
 
 # ─────────────────────────
-# HEADER
-# ─────────────────────────
-st.title("Threatify")
-st.caption("Behavioral Threat Detection System")
-
-# ─────────────────────────
-# SIDEBAR
+# SIDEBAR (KEEP THIS)
 # ─────────────────────────
 st.sidebar.title("Threatify")
 
-route = st.sidebar.radio(
+page = st.sidebar.radio(
     "Navigation",
     ["Full Scan", "Processes", "Startup", "Network", "Files"]
 )
@@ -100,70 +93,52 @@ def process_map_to_df(process_map):
     return df
 
 
-def show_table(title, alerts):
-    st.subheader(title)
+# ─────────────────────────
+# SCAN ENGINE
+# ─────────────────────────
+def run_scan():
+    process = scan_processes()
+    startup = check_startup()
+    network = scan_network()
+    files = monitor_files(duration=5)
 
-    df = alerts_to_df(alerts)
+    process_map = aggregate_by_process(process, startup, network, files)
 
-    if not df.empty:
-        st.dataframe(df, use_container_width=True)
-    else:
-        st.info("No issues detected")
+    score = calculate_threat_score(process, startup, network, files)
+    risk = get_risk_level(score)
 
-
-def show_score(score, risk):
-    st.subheader("Threat Assessment")
-
-    col1, col2 = st.columns(2)
-
-    col1.metric("Threat Score", f"{score}/100")
-
-    if risk == "CRITICAL":
-        col2.error(risk)
-    elif risk == "HIGH":
-        col2.error(risk)
-    elif risk == "MEDIUM":
-        col2.warning(risk)
-    else:
-        col2.success(risk)
-
-
-def summarize(alerts):
-    counts = {}
-    for a in alerts:
-        t = a.get("type", "unknown")
-        counts[t] = counts.get(t, 0) + 1
-    return counts
+    return {
+        "process": process,
+        "startup": startup,
+        "network": network,
+        "files": files,
+        "process_map": process_map,
+        "score": score,
+        "risk": risk
+    }
 
 
 # ─────────────────────────
-# FULL SCAN
+# FULL SCAN (AUTO)
 # ─────────────────────────
-if route == "Full Scan":
+if page == "Full Scan":
     st.header("System Scan")
 
-    if st.button("Run Full Scan"):
-        with st.spinner("Analyzing system..."):
+    if not st.session_state.has_scanned:
+        placeholder = st.empty()
 
-            process = scan_processes()
-            startup = check_startup()
-            network = scan_network()
-            files = monitor_files(duration=5)
+        for i in [3, 2, 1]:
+            placeholder.info(f"Starting scan in {i}...")
+            time.sleep(1)
 
-            process_map = aggregate_by_process(process, startup, network, files)
+        placeholder.info("Scanning system...")
 
-            score = calculate_threat_score(process, startup, network, files)
-            risk = get_risk_level(score)
+        results = run_scan()
 
-            st.session_state.results = {
-                "process": process,
-                "startup": startup,
-                "network": network,
-                "files": files,
-                "process_map": process_map,
-                "score": score,
-                "risk": risk
-            }
+        st.session_state.results = results
+        st.session_state.has_scanned = True
+
+        placeholder.success("Scan complete")
 
     results = st.session_state.results
 
@@ -176,7 +151,22 @@ if route == "Full Scan":
         score = results["score"]
         risk = results["risk"]
 
-        # ───── Overview ─────
+        # ───── STATUS ─────
+        st.subheader("Threat Status")
+
+        col1, col2 = st.columns(2)
+        col1.metric("Score", f"{score}/100")
+
+        if risk == "CRITICAL":
+            col2.error(risk)
+        elif risk == "HIGH":
+            col2.error(risk)
+        elif risk == "MEDIUM":
+            col2.warning(risk)
+        else:
+            col2.success(risk)
+
+        # ───── OVERVIEW ─────
         st.subheader("Overview")
 
         col1, col2, col3, col4 = st.columns(4)
@@ -185,71 +175,66 @@ if route == "Full Scan":
         col3.metric("Network", len(network))
         col4.metric("Files", len(files))
 
-        # ───── Process Ranking (NEW) ─────
-        st.subheader("Process Threat Ranking")
+        # ───── PROCESS RANKING (MAIN)
+        st.subheader("Top Processes")
 
         df_proc = process_map_to_df(process_map)
 
         if not df_proc.empty:
             st.dataframe(df_proc, use_container_width=True)
-
-            st.bar_chart(
-                df_proc.set_index("Process")["Score"]
-            )
         else:
             st.info("No risky processes detected")
 
-        # ───── Charts ─────
-        st.subheader("Alert Distribution")
+        # ───── SINGLE CLEAN CHART
+        st.subheader("Activity Overview")
 
         df = pd.DataFrame({
-            "Category": ["Process", "Startup", "Network", "Files"],
+            "Category": ["Processes", "Startup", "Network", "Files"],
             "Alerts": [len(process), len(startup), len(network), len(files)]
         }).set_index("Category")
 
-        col1, col2 = st.columns(2)
-        col1.bar_chart(df)
-        col2.line_chart(df)
+        st.bar_chart(df)
 
-        # ───── Tables ─────
-        st.divider()
+        # ───── DETAILS
+        with st.expander("Show Details"):
+            st.write("Processes", process)
+            st.write("Startup", startup)
+            st.write("Network", network)
+            st.write("Files", files)
 
-        show_table("Processes", process)
-        show_table("Startup", startup)
-        show_table("Network", network)
-        show_table("Files", files)
-
-        st.divider()
-
-        # ───── Score ─────
-        show_score(score, risk)
+    if st.button("Run Scan Again"):
+        st.session_state.has_scanned = False
+        st.rerun()
 
 
 # ─────────────────────────
 # MODULE PAGES
 # ─────────────────────────
-elif route == "Processes":
+elif page == "Processes":
     st.header("Process Analysis")
 
     if st.button("Run Analysis"):
-        show_table("Processes", scan_processes())
+        st.dataframe(alerts_to_df(scan_processes()))
 
-elif route == "Startup":
+
+elif page == "Startup":
     st.header("Startup Analysis")
 
     if st.button("Run Analysis"):
-        show_table("Startup", check_startup())
+        st.dataframe(alerts_to_df(check_startup()))
 
-elif route == "Network":
+
+elif page == "Network":
     st.header("Network Analysis")
 
     if st.button("Run Analysis"):
-        show_table("Network", scan_network())
+        st.dataframe(alerts_to_df(scan_network()))
 
-elif route == "Files":
+
+elif page == "Files":
     st.header("File Monitoring")
 
     duration = st.slider("Duration (seconds)", 5, 300, 60)
 
     if st.button("Start Monitoring"):
-        show_table("Files", monitor_files(duration=duration))
+        st.dataframe(alerts_to_df(monitor_files(duration=duration)))
