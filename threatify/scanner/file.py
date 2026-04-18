@@ -4,14 +4,53 @@ from collections import defaultdict
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+from core.config import (
+    SUSPICIOUS_EXTENSIONS,
+    WRITE_THRESHOLD,
+    get_suspicious_paths,
+    normalize_path,
+)
+
 # ─────────────────────────
 # CONFIG
 # ─────────────────────────
-SUSPICIOUS_PATHS = ["temp", "tmp", "appdata"]
-SUSPICIOUS_EXTENSIONS = [".log", ".txt", ".dat"]
-IGNORE_DIRS = ["cache", ".cache", "node_modules", ".git"]
+IGNORE_DIRS = [
+    "cache", ".cache", "node_modules", ".git",
+    "mozilla", "chromium", "google-chrome"
+]
 
-WRITE_THRESHOLD = 15
+IGNORE_EXTENSIONS = [
+    ".tmp", ".cache", ".swp", ".lock"
+]
+
+MIN_WRITE_THRESHOLD = WRITE_THRESHOLD
+HIGH_WRITE_THRESHOLD = WRITE_THRESHOLD * 3
+
+
+# ─────────────────────────
+# FILTER LAYER (NEW)
+# ─────────────────────────
+def is_noise_file(path):
+    """
+    Filter out normal OS/application file activity
+    """
+
+    # Ignore common noisy directories
+    if any(ignored in path for ignored in IGNORE_DIRS):
+        return True
+
+    # Ignore temp/cache files
+    if any(path.endswith(ext) for ext in IGNORE_EXTENSIONS):
+        return True
+
+    # Ignore very small files (frequent system noise)
+    try:
+        if os.path.exists(path) and os.path.getsize(path) < 512:
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 # ─────────────────────────
@@ -21,15 +60,16 @@ class ThreatFileHandler(FileSystemEventHandler):
 
     def __init__(self):
         self.activity = defaultdict(int)
+        self.timestamps = defaultdict(list)
 
     def _track(self, path):
-        path = path.lower()
+        path = normalize_path(path)
 
-        # Ignore noisy directories
-        if any(ignored in path for ignored in IGNORE_DIRS):
+        if is_noise_file(path):
             return
 
         self.activity[path] += 1
+        self.timestamps[path].append(time.time())
 
     def on_modified(self, event):
         if not event.is_directory:
@@ -43,47 +83,83 @@ class ThreatFileHandler(FileSystemEventHandler):
 # ─────────────────────────
 # ANALYZER
 # ─────────────────────────
-def analyze_file_activity(activity):
+def analyze_file_activity(activity, timestamps):
     alerts = []
-    seen = set()
+
+    suspicious_paths = [normalize_path(p) for p in get_suspicious_paths()]
 
     for path, count in activity.items():
-        key = (path, )
-        if key in seen:
-            continue
-        seen.add(key)
-
         reasons = []
+        severity = 1
+        confidence = 0.5
 
         # ─── Rule 1: High frequency writes ───
-        if count > WRITE_THRESHOLD:
-            reasons.append("High frequency writes")
+        if count > HIGH_WRITE_THRESHOLD:
+            reasons.append("High frequency writes (possible keylogging)")
+            severity = 4
+            confidence = 0.85
+
+        elif count > MIN_WRITE_THRESHOLD:
+            reasons.append("Moderate frequent writes")
+            severity = 3
+            confidence = 0.7
 
         # ─── Rule 2: Suspicious directory ───
-        if any(p in path for p in SUSPICIOUS_PATHS):
+        if any(p in path for p in suspicious_paths):
             reasons.append("Suspicious location")
+            severity = max(severity, 3)
+            confidence = max(confidence, 0.7)
 
-        # ─── Rule 3: Suspicious file type ───
+        # ─── Rule 3: Log-like pattern ───
         if any(path.endswith(ext) for ext in SUSPICIOUS_EXTENSIONS):
-            if count > 5:
+            if count > 10:
                 reasons.append("Repeated writes to log-like file")
+                severity = max(severity, 4)
+                confidence = max(confidence, 0.8)
 
-        # ─── Rule 4: Hidden files ───
+        # ─── Rule 4: Hidden file ───
         if os.path.basename(path).startswith("."):
             reasons.append("Hidden file activity")
+            severity = max(severity, 2)
 
-        # ─── Rule 5: File size check ───
+        # ─── Rule 5: Write burst ───
+        times = timestamps.get(path, [])
+        if len(times) > 5:
+            duration = times[-1] - times[0]
+            if duration > 0:
+                rate = len(times) / duration
+
+                if rate > 10:
+                    reasons.append("Rapid write burst detected")
+                    severity = max(severity, 4)
+                    confidence = max(confidence, 0.85)
+
+        # ─── Rule 6: File size anomaly ───
         try:
-            size = os.path.getsize(path)
-            if size > 5 * 1024 * 1024:  # >5MB
-                reasons.append("Large file activity")
+            if os.path.exists(path):
+                size = os.path.getsize(path)
+                if size > 5 * 1024 * 1024:
+                    reasons.append("Large file activity")
+                    severity = max(severity, 2)
         except Exception:
             pass
 
-        if reasons:
+        # ─── FINAL FILTER ───
+        if reasons and confidence >= 0.6:
+            alert_type = "high_freq_write"
+
+            if any("log-like" in r for r in reasons):
+                alert_type = "log_pattern_write"
+
             alerts.append({
-                "file": path,
-                "writes": count,
+                "source": "file",
+                "type": alert_type,
+                "severity": severity,
+                "confidence": round(confidence, 2),
+                "data": {
+                    "file": path,
+                    "writes": count
+                },
                 "reason": ", ".join(reasons)
             })
 
@@ -93,11 +169,7 @@ def analyze_file_activity(activity):
 # ─────────────────────────
 # MONITOR
 # ─────────────────────────
-def monitor_files(duration=10):
-    """
-    Monitor file activity for given duration (seconds)
-    """
-
+def monitor_files(duration=60):
     handler = ThreatFileHandler()
     observer = Observer()
 
@@ -106,10 +178,13 @@ def monitor_files(duration=10):
     observer.schedule(handler, watch_path, recursive=True)
     observer.start()
 
+    start = time.time()
+
     try:
-        time.sleep(duration)
+        while time.time() - start < duration:
+            time.sleep(1)
     finally:
         observer.stop()
         observer.join()
 
-    return analyze_file_activity(handler.activity)
+    return analyze_file_activity(handler.activity, handler.timestamps)

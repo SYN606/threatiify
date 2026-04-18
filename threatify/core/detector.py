@@ -1,79 +1,77 @@
-from core.config import (PROCESS_WEIGHTS, STARTUP_WEIGHTS,
-                                   NETWORK_WEIGHTS, FILE_WEIGHTS, MAX_SCORE)
+# core/detector.py
+
+from core.config import (
+    THREAT_WEIGHTS,
+    MAX_SCORE,
+    get_trusted_paths,
+    normalize_path,
+)
+
+from core.correlator import correlate
 
 
 # ─────────────────────────
-# HELPERS
+# TRUST ADJUSTMENT
 # ─────────────────────────
-def _score_from_reasons(reason_string, weight_map):
-    """
-    Match reason keywords with weights
-    """
-    score = 0
-    reason_string = reason_string.lower()
+def adjust_for_trust(alert):
+    path = normalize_path(alert.get("data", {}).get("path", ""))
 
-    for key, weight in weight_map.items():
-        if key.lower() in reason_string:
-            score += weight
+    for trusted in get_trusted_paths():
+        if path.startswith(normalize_path(trusted)):
+            alert["confidence"] *= 0.5
+            break
 
-    return score
-
-
-def _normalize_score(score, total_items):
-    """
-    Normalize score based on number of alerts
-    """
-    if total_items == 0:
-        return 0
-
-    # Normalize to avoid inflation
-    normalized = score / total_items * 2
-    return min(int(normalized), MAX_SCORE)
+    return alert
 
 
 # ─────────────────────────
-# CORE SCORING ENGINE
+# SCORING ENGINE
 # ─────────────────────────
 def calculate_threat_score(process_alerts,
                            startup_alerts,
                            network_alerts,
                            file_alerts=None):
+
+    all_alerts = (
+        process_alerts +
+        startup_alerts +
+        network_alerts +
+        (file_alerts if file_alerts else [])
+    )
+
+    if not all_alerts:
+        return 0
+
     total_score = 0
+    processed_alerts = []
 
-    # ─── Process ───
-    for alert in process_alerts:
-        total_score += _score_from_reasons(alert["reason"], PROCESS_WEIGHTS)
+    for alert in all_alerts:
+        alert = adjust_for_trust(alert)
 
-    # ─── Startup ───
-    for alert in startup_alerts:
-        total_score += _score_from_reasons(alert["reason"], STARTUP_WEIGHTS)
+        weight = THREAT_WEIGHTS.get(alert.get("type"), 0)
+        severity = alert.get("severity", 1)
+        confidence = alert.get("confidence", 0.5)
 
-    # ─── Network ───
-    for alert in network_alerts:
-        total_score += _score_from_reasons(alert["reason"], NETWORK_WEIGHTS)
+        score = weight * severity * confidence
+        total_score += score
 
-    # ─── File ───
-    if file_alerts:
-        for alert in file_alerts:
-            total_score += _score_from_reasons(alert["reason"], FILE_WEIGHTS)
+        processed_alerts.append(alert)
 
-    # ─── Normalize ───
-    total_items = (len(process_alerts) + len(startup_alerts) +
-                   len(network_alerts) +
-                   (len(file_alerts) if file_alerts else 0))
+    # ─── Correlation bonus ───
+    total_score += correlate(processed_alerts)
 
-    return _normalize_score(total_score, total_items)
+    return min(int(total_score), MAX_SCORE)
 
 
 # ─────────────────────────
 # RISK CLASSIFICATION
 # ─────────────────────────
 def get_risk_level(score):
-    if score < 20:
-        return "SAFE"
-    elif score < 50:
-        return "MEDIUM"
-    elif score < 80:
-        return "HIGH"
-    else:
+    if score >= 85:
         return "CRITICAL"
+    elif score >= 60:
+        return "HIGH"
+    elif score >= 30:
+        return "MEDIUM"
+    else:
+        return "SAFE"

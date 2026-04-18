@@ -1,4 +1,7 @@
 import click
+import subprocess
+import sys
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -8,7 +11,9 @@ from scanner.process import scan_processes
 from scanner.startup import check_startup
 from scanner.network import scan_network
 from scanner.file import monitor_files
+
 from core.detector import calculate_threat_score, get_risk_level
+from core.aggregator import aggregate_by_process
 
 console = Console()
 
@@ -19,8 +24,8 @@ console = Console()
 def render_banner():
     banner = Text()
     banner.append("Threatify", style="bold cyan")
-    banner.append("  |  Behavioral Threat Detection System\n", style="white")
-    banner.append("Version 0.1.0\n", style="dim")
+    banner.append("  |  Behavioral Threat Detection System\n")
+    banner.append("Version 0.2.0\n", style="dim")
 
     console.print(Panel.fit(banner))
 
@@ -30,120 +35,153 @@ def render_banner():
 # ─────────────────────────
 def render_process_table(alerts):
     table = Table(title="Process Analysis")
-    table.add_column("Process", style="cyan")
-    table.add_column("PID", style="yellow")
-    table.add_column("CPU (%)", style="magenta")
-    table.add_column("Reason", style="red")
+    table.add_column("Process")
+    table.add_column("PID")
+    table.add_column("CPU (%)")
+    table.add_column("Reason")
 
     for a in alerts:
-        table.add_row(a["process"], str(a["pid"]), str(a["cpu"]), a["reason"])
+        data = a.get("data", {})
+
+        table.add_row(
+            str(data.get("process", "unknown")),
+            str(data.get("pid", "N/A")),
+            str(data.get("cpu", "0")),
+            a.get("reason", "N/A"),
+        )
 
     console.print(table)
 
 
 def render_startup_table(alerts):
     table = Table(title="Startup Analysis")
-    table.add_column("Name", style="cyan")
-    table.add_column("Location", style="blue")
-    table.add_column("Reason", style="red")
+    table.add_column("Name")
+    table.add_column("Location")
+    table.add_column("Reason")
 
     for a in alerts:
-        table.add_row(a["name"], a["location"], a["reason"])
+        data = a.get("data", {})
+
+        table.add_row(
+            data.get("name", "unknown"),
+            data.get("location", "unknown"),
+            a.get("reason", "N/A"),
+        )
 
     console.print(table)
 
 
 def render_network_table(alerts):
     table = Table(title="Network Analysis")
-    table.add_column("Process", style="cyan")
-    table.add_column("PID", style="yellow")
-    table.add_column("Remote", style="magenta")
-    table.add_column("Status", style="blue")
-    table.add_column("Reason", style="red")
+    table.add_column("Process")
+    table.add_column("PID")
+    table.add_column("Remote")
+    table.add_column("Reason")
 
     for a in alerts:
-        table.add_row(a["process"], str(a["pid"]), a["remote"], a["status"],
-                      a["reason"])
+        data = a.get("data", {})
+
+        table.add_row(
+            str(data.get("process", "unknown")),
+            str(data.get("pid", "N/A")),
+            str(data.get("remote", "N/A")),
+            a.get("reason", "N/A"),
+        )
 
     console.print(table)
 
 
 def render_file_table(alerts):
     table = Table(title="File Activity Analysis")
-    table.add_column("File", style="yellow")
-    table.add_column("Writes", style="cyan")
-    table.add_column("Reason", style="red")
+    table.add_column("File")
+    table.add_column("Writes")
+    table.add_column("Reason")
 
     for a in alerts:
-        table.add_row(a["file"], str(a["writes"]), a["reason"])
+        data = a.get("data", {})
+
+        table.add_row(
+            data.get("file", "unknown"),
+            str(data.get("writes", 0)),
+            a.get("reason", "N/A"),
+        )
+
+    console.print(table)
+
+
+# ─────────────────────────
+# PROCESS SUMMARY (KEY)
+# ─────────────────────────
+def render_process_summary(process_map):
+    table = Table(title="Per-Process Threat Summary")
+
+    table.add_column("PID")
+    table.add_column("Process")
+    table.add_column("Risk")
+    table.add_column("Score")
+    table.add_column("Alerts")
+
+    # Sort by score descending
+    sorted_items = sorted(
+        process_map.items(),
+        key=lambda x: x[1]["score"],
+        reverse=True
+    )
+
+    for pid, info in sorted_items:
+        process_name = "unknown"
+
+        for a in info["alerts"]:
+            data = a.get("data", {})
+            if "process" in data:
+                process_name = data["process"]
+                break
+
+        table.add_row(
+            str(pid),
+            process_name,
+            info["risk"],
+            str(info["score"]),
+            str(len(info["alerts"]))
+        )
 
     console.print(table)
 
 
 def render_summary(score, risk):
-    console.print("\n[bold]Threat Assessment[/bold]")
-    console.print(f"Score: [cyan]{score}/100[/cyan]")
-
-    color = {
-        "SAFE": "green",
-        "MEDIUM": "yellow",
-        "HIGH": "red",
-        "CRITICAL": "bold red"
-    }[risk]
-
-    console.print(f"Status: [{color}]{risk}[/{color}]")
-
-
-def show_help():
-    render_banner()
-
-    table = Table(title="Commands")
-    table.add_column("Command", style="cyan")
-    table.add_column("Description")
-
-    table.add_row("scan", "Run full system scan")
-    table.add_row("processes", "Analyze running processes")
-    table.add_row("startup", "Analyze startup persistence")
-    table.add_row("network", "Analyze network connections")
-    table.add_row("files", "Monitor file activity")
-    table.add_row("--version", "Show version information")
-
-    console.print(table)
-
-    console.print("\nExamples:")
-    console.print("  threatify scan")
-    console.print("  threatify scan --files")
-    console.print("  threatify files --time 15")
+    console.print("\nThreat Assessment")
+    console.print(f"Score: {score}/100")
+    console.print(f"Status: {risk}")
 
 
 def render_clean(message):
-    console.print(f"[green]{message}[/green]")
+    console.print(message)
 
 
 # ─────────────────────────
 # CLI ROOT
 # ─────────────────────────
 @click.group(invoke_without_command=True)
-@click.option("--version", is_flag=True, help="Show Threatify version")
+@click.option("--version", is_flag=True)
 @click.pass_context
 def main(ctx, version):
     if version:
-        console.print("Threatify v0.1.0")
+        console.print("Threatify v0.2.0")
         return
 
     if ctx.invoked_subcommand is None:
-        show_help()
+        console.print("Use --help for commands")
 
 
 # ─────────────────────────
 # FULL SCAN
 # ─────────────────────────
 @main.command()
-@click.option("--files", is_flag=True, help="Include file monitoring")
+@click.option("--files", is_flag=True)
 def scan(files):
     render_banner()
 
-    console.print("[bold]Starting system scan...[/bold]\n")
+    console.print("Starting system scan...\n")
 
     process_alerts = scan_processes()
     startup_alerts = check_startup()
@@ -154,34 +192,46 @@ def scan(files):
         console.print("Monitoring file activity...")
         file_alerts = monitor_files(duration=5)
 
-    # Process
+    # ───── Tables ─────
     if process_alerts:
         render_process_table(process_alerts)
     else:
         render_clean("No suspicious processes detected")
 
-    # Startup
     if startup_alerts:
         render_startup_table(startup_alerts)
     else:
         render_clean("No suspicious startup entries detected")
 
-    # Network
     if network_alerts:
         render_network_table(network_alerts)
     else:
         render_clean("No suspicious network activity detected")
 
-    # File
     if files:
         if file_alerts:
             render_file_table(file_alerts)
         else:
             render_clean("No suspicious file activity detected")
 
-    # Detection Engine
-    score = calculate_threat_score(process_alerts, startup_alerts,
-                                   network_alerts, file_alerts)
+    # ───── Aggregation ─────
+    process_map = aggregate_by_process(
+        process_alerts,
+        startup_alerts,
+        network_alerts,
+        file_alerts,
+    )
+
+    if process_map:
+        render_process_summary(process_map)
+
+    # ───── Global Score ─────
+    score = calculate_threat_score(
+        process_alerts,
+        startup_alerts,
+        network_alerts,
+        file_alerts,
+    )
 
     risk = get_risk_level(score)
 
@@ -189,7 +239,7 @@ def scan(files):
 
 
 # ─────────────────────────
-# INDIVIDUAL COMMANDS
+# MODULE COMMANDS
 # ─────────────────────────
 @main.command()
 def processes():
@@ -228,7 +278,7 @@ def network():
 
 
 @main.command()
-@click.option("--time", default=10, help="Monitoring duration in seconds")
+@click.option("--time", default=10)
 def files(time):
     render_banner()
     console.print(f"Monitoring file activity for {time} seconds...\n")
@@ -242,5 +292,27 @@ def files(time):
     render_file_table(alerts)
 
 
+# ─────────────────────────
+# WEB COMMAND
+# ─────────────────────────
+@main.command()
+def web():
+    render_banner()
+    console.print("Launching web dashboard...\n")
+
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "streamlit", "run", "threatify/webapp.py"],
+            check=True
+        )
+    except FileNotFoundError:
+        console.print("Streamlit not installed.")
+    except Exception as e:
+        console.print(f"Error: {e}")
+
+
+# ─────────────────────────
+# ENTRYPOINT
+# ─────────────────────────
 if __name__ == "__main__":
     main()
